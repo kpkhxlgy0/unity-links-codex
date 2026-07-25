@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tweak
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Run tweak tests
+        shell: pwsh
+        run: npm test
+
+      - name: Run release validator tests
+        shell: pwsh
+        run: node --test ./scripts/release/validate-release.test.mjs
+
+      - name: Validate current release metadata
+        shell: pwsh
+        run: node ./scripts/release/validate-release.mjs $env:GITHUB_WORKSPACE 0.2.0
+
+      - name: Check diff formatting
+        shell: pwsh
+        run: git diff --check
+
+      - name: Check out pinned Codex++
+        uses: actions/checkout@v6
+        with:
+          repository: b-nnett/codex-plusplus
+          ref: f98e7e9d1fa068dde9e0dddfb43b128acb4e2fd7
+          path: .ci-tools/codex-plusplus
+          persist-credentials: false
+
+      - name: Build Codex++ validator
+        shell: pwsh
+        working-directory: .ci-tools/codex-plusplus
+        run: |
+          npm ci --ignore-scripts
+          npm run build --workspace @codex-plusplus/sdk
+          npm run build --workspace codex-plusplus
+
+      - name: Validate tweak with Codex++
+        shell: pwsh
+        run: |
+          node .\.ci-tools\codex-plusplus\packages\installer\dist\cli.js `
+            validate-tweak $env:GITHUB_WORKSPACE
