@@ -54,7 +54,7 @@ codexplusplus validate-tweak (Resolve-Path .).Path
 
 ## 兼容性
 
-组件版本 `0.2.1` 与 `unity-links-unity` 版本 `0.2.1` 配套验证。总入口仓库会固定一对共同验证过的组件
+组件版本 `0.2.2` 与 `unity-links-unity` 版本 `0.2.2` 配套验证。总入口仓库会固定一对共同验证过的组件
 commit。
 
 ## 发布流程

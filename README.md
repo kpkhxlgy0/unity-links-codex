@@ -55,7 +55,7 @@ path.
 
 ## Compatibility
 
-Component version `0.2.1` is tested with `unity-links-unity` version `0.2.1`. The umbrella repository pins the exact
+Component version `0.2.2` is tested with `unity-links-unity` version `0.2.2`. The umbrella repository pins the exact
 component commits validated together.
 
 ## Release Process
