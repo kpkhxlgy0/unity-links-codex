@@ -17,41 +17,79 @@ function parseScalar(value) {
   return quoted ? quoted[2] : trimmed;
 }
 
-function checkoutSteps(workflow) {
-  const lines = workflow.split(/\r?\n/);
-  const steps = [];
-  for (let start = 0; start < lines.length; start += 1) {
-    const nameMatch = lines[start].match(/^(\s*)-\s+name:\s*(.+?)\s*$/);
-    if (!nameMatch) continue;
-
-    const stepIndent = nameMatch[1].length;
-    const step = { name: parseScalar(nameMatch[2]), uses: "", with: {} };
-    let withIndent = -1;
-    for (let cursor = start + 1; cursor < lines.length; cursor += 1) {
-      const line = lines[cursor];
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-
-      const currentIndent = indentation(line);
-      if (currentIndent <= stepIndent) break;
-
-      const usesMatch = trimmed.match(/^uses:\s*(\S+)$/);
-      if (usesMatch) {
-        step.uses = parseScalar(usesMatch[1]);
-        continue;
-      }
-      if (trimmed === "with:") {
-        withIndent = currentIndent;
-        continue;
-      }
-      if (withIndent >= 0 && currentIndent > withIndent) {
-        const fieldMatch = trimmed.match(/^([A-Za-z0-9_-]+):\s*(.*?)\s*$/);
-        if (fieldMatch) step.with[fieldMatch[1]] = parseScalar(fieldMatch[2]);
-      } else if (currentIndent <= withIndent) {
-        withIndent = -1;
-      }
+function structuralLines(workflow) {
+  const lines = [];
+  let blockScalarIndent = -1;
+  for (const rawLine of workflow.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    const currentIndent = indentation(rawLine);
+    if (blockScalarIndent >= 0) {
+      if (!trimmed || currentIndent > blockScalarIndent) continue;
+      blockScalarIndent = -1;
     }
-    if (step.uses.startsWith("actions/checkout@")) steps.push(step);
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    lines.push({ indent: currentIndent, trimmed });
+    if (/:\s*[|>](?:[+-][1-9]?|[1-9][+-]?)?\s*(?:#.*)?$/.test(trimmed)) {
+      blockScalarIndent = currentIndent;
+    }
+  }
+  return lines;
+}
+
+function checkoutSteps(workflow) {
+  const lines = structuralLines(workflow);
+  const steps = [];
+  const mappingPath = [];
+  for (let start = 0; start < lines.length; start += 1) {
+    const line = lines[start];
+    while (mappingPath.length && mappingPath.at(-1).indent >= line.indent) mappingPath.pop();
+
+    const nameMatch = line.trimmed.match(/^-\s+name:\s*(.+?)\s*$/);
+    const path = mappingPath.map((entry) => entry.key);
+    const isJobStep = path.length === 3 && path[0] === "jobs" && path[2] === "steps";
+    if (nameMatch && isJobStep) {
+      const stepIndent = line.indent;
+      const stepLines = [];
+      for (let cursor = start + 1; cursor < lines.length; cursor += 1) {
+        if (lines[cursor].indent <= stepIndent) break;
+        stepLines.push(lines[cursor]);
+      }
+
+      const directIndent = stepLines.reduce(
+        (minimum, child) => Math.min(minimum, child.indent),
+        Number.POSITIVE_INFINITY,
+      );
+      const step = { name: parseScalar(nameMatch[1]), uses: "", with: {} };
+      const withIndex = stepLines.findIndex(
+        (child) => child.indent === directIndent && child.trimmed === "with:",
+      );
+      const usesLine = stepLines.find(
+        (child) => child.indent === directIndent && /^uses:\s*(\S+)$/.test(child.trimmed),
+      );
+      if (usesLine) step.uses = parseScalar(usesLine.trimmed.match(/^uses:\s*(\S+)$/)[1]);
+
+      if (withIndex >= 0) {
+        const withLines = [];
+        for (let cursor = withIndex + 1; cursor < stepLines.length; cursor += 1) {
+          if (stepLines[cursor].indent <= directIndent) break;
+          withLines.push(stepLines[cursor]);
+        }
+        const withChildIndent = withLines.reduce(
+          (minimum, child) => Math.min(minimum, child.indent),
+          Number.POSITIVE_INFINITY,
+        );
+        for (const child of withLines) {
+          if (child.indent !== withChildIndent) continue;
+          const fieldMatch = child.trimmed.match(/^([A-Za-z0-9_-]+):\s*(.*?)\s*$/);
+          if (fieldMatch) step.with[fieldMatch[1]] = parseScalar(fieldMatch[2]);
+        }
+      }
+      if (step.uses.startsWith("actions/checkout@")) steps.push(step);
+    }
+
+    const mappingMatch = line.trimmed.match(/^([^:#][^:]*):\s*$/);
+    if (mappingMatch) mappingPath.push({ indent: line.indent, key: parseScalar(mappingMatch[1]) });
   }
   return steps;
 }
@@ -97,4 +135,49 @@ jobs:
 `;
     assert.throws(() => assertReviewedCodexCheckout(workflow, "decoy"), expectedError);
   }
+});
+
+test("checkout validation ignores sparse-checkout block scalar decoys", () => {
+  for (const indicator of ["|", ">-", "|2+"]) {
+    for (const [repository, ref, expectedError] of [
+      ["example/wrong", expectedCommit, /wrong checkout repository/],
+      [expectedRepository, "wrong-ref", /wrong checkout ref/],
+    ]) {
+      const workflow = `
+jobs:
+  validate:
+    steps:
+      - name: Check out pinned Codex++
+        uses: actions/checkout@v6
+        with:
+          repository: ${repository}
+          ref: ${ref}
+          sparse-checkout: ${indicator}
+            repository: ${expectedRepository}
+            ref: ${expectedCommit}
+`;
+      assert.throws(() => assertReviewedCodexCheckout(workflow, "block decoy"), expectedError);
+    }
+  }
+});
+
+test("checkout validation ignores fake steps inside run block scalars", () => {
+  const workflow = `
+jobs:
+  validate:
+    steps:
+      - name: Unrelated script
+        shell: pwsh
+        run: |
+          Write-Output decoy
+          - name: Check out pinned Codex++
+            uses: actions/checkout@v6
+            with:
+              repository: ${expectedRepository}
+              ref: ${expectedCommit}
+`;
+  assert.throws(
+    () => assertReviewedCodexCheckout(workflow, "run block decoy"),
+    /expected one pinned Codex\+\+ checkout step/,
+  );
 });
