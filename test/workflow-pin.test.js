@@ -5,7 +5,7 @@ const { test } = require("node:test");
 
 const repositoryRoot = resolve(__dirname, "..");
 const expectedRepository = "kpkhxlgy0/codex-plusplus";
-const expectedCommit = "85d4065f7c025327bb6fb8075ef9225dda5d185f";
+const expectedCommit = "534d641087778bd7a2055481be490307fd914980";
 
 function indentation(line) {
   return line.length - line.trimStart().length;
